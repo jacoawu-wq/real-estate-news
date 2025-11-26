@@ -47,6 +47,11 @@ st.markdown("""
         margin-bottom: 5px;
         font-size: 14px;
     }
+    .error-msg {
+        color: #e17055;
+        font-size: 12px;
+        margin-top: 5px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -55,7 +60,7 @@ api_key = st.secrets.get("GEMINI_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
 
-# --- 核心功能 1：抓取新聞 (加上快取：1小時更新一次) ---
+# --- 核心功能 1：抓取新聞 (快取 1 小時) ---
 @st.cache_data(ttl=3600)
 def get_six_capital_news():
     base_url = "https://news.google.com/rss/search?q="
@@ -91,7 +96,7 @@ def get_six_capital_news():
     
     return news_items
 
-# --- 核心功能 2：AI 分析 (加上快取與緩衝) ---
+# --- 核心功能 2：AI 分析 (智能切換模型) ---
 @st.cache_data(show_spinner=False)
 def analyze_with_ai(news_title):
     if not api_key:
@@ -100,47 +105,46 @@ def analyze_with_ai(news_title):
     prompt = f"""
     你是一位專業的台灣房地產分析師。請針對以下新聞標題進行分析：
     新聞標題：「{news_title}」
-
-    請依照以下邏輯分析，並嚴格遵守字數限制：
-    1. **判斷類型**：先判斷這是「一般新聞」還是「建案廣編/廣告」。
-    2. **產業分析 (約100字)**：這則消息對房地產市場的影響、趨勢或觀察。
-    3. **受眾分析 (約100字)**：
-       - 如果是新聞：分析哪個族群（如首購、投資客、換屋族）看到會最有感？
-       - 如果是廣編/建案：分析這是在跟什麼樣的族群（如小資、豪宅客、退休族）對話？
-
-    請直接輸出分析結果，格式如下：
-    **【產業觀點】** ...內容...
-    **【受眾畫像】** ...內容...
+    
+    請簡潔分析（各約100字）：
+    1. **【產業觀點】**：對市場的影響或趨勢。
+    2. **【受眾畫像】**：誰會對這則新聞最有感？
     """
     
+    # 策略：優先使用 gemini-1.5-flash (快)，失敗則切換 gemini-pro (穩)
     try:
-        # 安全緩衝：休息 1 秒，避免瞬間請求過快觸發限制
-        time.sleep(1)
+        time.sleep(1) # 安全緩衝
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         return response.text
-    except Exception as e:
-        return f"AI 分析暫時休息中 ({str(e)})"
+    except Exception as e_flash:
+        try:
+            # 如果 Flash 失敗，切換到 Pro 模型
+            model = genai.GenerativeModel('gemini-pro')
+            response = model.generate_content(prompt)
+            return response.text + "\n\n*(備註：使用相容模式生成)*"
+        except Exception as e_pro:
+            return f"AI 分析暫時休息中 (請確認 requirements.txt 已設定 >=0.7.0 並已重啟 App)"
 
 # --- 網頁介面呈現 ---
 st.title("🧠 六都房市 AI 戰情室")
-st.caption(f"資料來源：Google News | 更新頻率：每小時自動刷新 | 支援多人同時瀏覽")
+st.caption(f"資料來源：Google News | 智能模型：Gemini Auto-Switch")
 
-# 手動刷新按鈕：加上清除快取的功能
+# 手動刷新按鈕
 if st.button("🔄 強制刷新 (清除快取)"):
     st.cache_data.clear()
     st.rerun()
 
-# 執行流程
+# 主程式流程
 try:
-    # 這裡只會顯示第一次載入的轉圈圈，之後都會秒開
-    with st.spinner('正在彙整最新房市情報... (首次載入約需 20 秒)'):
+    with st.spinner('正在搜尋並分析新聞... (首次載入可能需要 30 秒)'):
         news_data = get_six_capital_news()
         
         if not news_data:
             st.warning("目前沒有最新新聞。")
         else:
             for news in news_data:
+                # 顯示新聞卡片
                 st.markdown(f"""
                 <div class="news-card">
                     <a href="{news['link']}" target="_blank" class="news-title">{news['title']}</a>
@@ -149,9 +153,10 @@ try:
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # 這裡會優先讀取快取，如果有快取則 0 秒顯示
+                # 呼叫 AI 分析 (有快取)
                 ai_result = analyze_with_ai(news['title'])
                 
+                # 顯示 AI 結果
                 st.markdown(f"""
                     <div class="ai-box">
                         <div class="ai-label">✨ AI 智能解析</div>
@@ -162,9 +167,7 @@ try:
                 </div>
                 """, unsafe_allow_html=True)
             
-            st.success("✅ 今日情報彙整完成！")
+            st.success("✅ 分析完成！")
             
 except Exception as e:
     st.error(f"系統發生錯誤：{e}")
-
-
