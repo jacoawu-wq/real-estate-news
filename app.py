@@ -171,7 +171,7 @@ def analyze_with_ai(news_title, model_name):
         return f"⚠️ 分析失敗 ({error_str})"
 
 # --- 網頁介面呈現 ---
-st.title("🧠 六都房市 AI 戰情室")
+st.title("🧠 六都房市新聞 AI 戰情室")
 
 # 1. 取得目前可用的模型名稱
 current_model_name = get_valid_model_name()
@@ -235,4 +235,5 @@ st.markdown(f"""
     如果 GenAI 版本低於 0.7.0，請再次檢查 requirements.txt 並重啟 App。
 </div>
 """, unsafe_allow_html=True)
+
 
