@@ -64,35 +64,48 @@ api_key = st.secrets.get("GEMINI_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
 
-# --- 核心功能 0：自動尋找可用的模型 (關鍵修復) ---
+# --- 核心功能 0：自動尋找可用的模型 (邏輯修正版) ---
 @st.cache_resource
 def get_valid_model_name():
     if not api_key:
         return None
     
     try:
-        # 直接問 API 哪些模型可以用
+        # 1. 取得所有支援生成的模型清單
         valid_models = []
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
                 valid_models.append(m.name)
         
-        # 優先順序策略
-        preferences = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-1.0-pro', 'models/gemini-pro']
+        # 2. 設定優先順序 (強制鎖定穩定版，避開 exp 模型)
+        preferences = [
+            'models/gemini-1.5-flash',
+            'models/gemini-1.5-pro', 
+            'models/gemini-1.0-pro', 
+            'models/gemini-pro'
+        ]
         
+        # 3. 嘗試匹配優先清單
         for pref in preferences:
             if pref in valid_models:
                 return pref
         
-        # 如果都沒有，就回傳清單中的第一個
-        if valid_models:
-            return valid_models[0]
-            
-        return 'gemini-pro' # 萬一真的什麼都沒抓到，只好用猜的
+        # 4. 如果優先清單都沒抓到，嘗試找任何 "Flash" 模型 (且不能是 exp 實驗版)
+        for m in valid_models:
+            if 'flash' in m.lower() and 'exp' not in m.lower():
+                return m
+                
+        # 5. 再找不到，找任何 "Pro" 模型 (且不能是 exp 實驗版)
+        for m in valid_models:
+            if 'pro' in m.lower() and 'exp' not in m.lower():
+                return m
+
+        # 6. 真的都沒找到，直接回傳預設值 (不要回傳 valid_models[0]，因為那可能是實驗版)
+        return 'models/gemini-1.5-flash'
         
     except Exception as e:
         print(f"List models failed: {e}")
-        return 'gemini-pro' # 發生錯誤時的備案
+        return 'models/gemini-1.5-flash' # 發生錯誤時的保險
 
 # --- 核心功能 1：抓取新聞 (快取 1 小時) ---
 @st.cache_data(ttl=3600)
@@ -146,12 +159,16 @@ def analyze_with_ai(news_title, model_name):
     """
     
     try:
-        time.sleep(1) # 安全緩衝
+        time.sleep(1.5) # 增加緩衝時間至 1.5 秒，避免 429 錯誤
         model = genai.GenerativeModel(model_name)
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"⚠️ 分析失敗 ({str(e)})"
+        # 如果遇到 429 錯誤，顯示更友善的訊息
+        error_str = str(e)
+        if "429" in error_str:
+            return "⚠️ AI 分析忙碌中 (流量限制)，請稍後再試。"
+        return f"⚠️ 分析失敗 ({error_str})"
 
 # --- 網頁介面呈現 ---
 st.title("🧠 六都房市 AI 戰情室")
