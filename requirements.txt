@@ -2,3 +2,4 @@ streamlit
 feedparser
 pandas
 google-generativeai
+>=0.7.0
