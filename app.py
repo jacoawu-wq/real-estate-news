@@ -7,7 +7,7 @@ import sys
 
 # --- 設定網頁基本資訊 ---
 st.set_page_config(
-    page_title="六都房市 AI 戰情室",
+    page_title="六都房市新聞 AI 戰情室",
     page_icon="🧠",
     layout="centered"
 )
@@ -235,3 +235,4 @@ st.markdown(f"""
     如果 GenAI 版本低於 0.7.0，請再次檢查 requirements.txt 並重啟 App。
 </div>
 """, unsafe_allow_html=True)
+
