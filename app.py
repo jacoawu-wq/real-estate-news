@@ -116,7 +116,7 @@ def analyze_with_ai(news_title):
     try:
         # 安全緩衝：休息 1 秒，避免瞬間請求過快觸發限制
         time.sleep(1)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-pro')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
@@ -166,3 +166,4 @@ try:
             
 except Exception as e:
     st.error(f"系統發生錯誤：{e}")
+
