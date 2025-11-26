@@ -3,6 +3,7 @@ import feedparser
 import google.generativeai as genai
 from datetime import datetime
 import time
+import sys
 
 # --- 設定網頁基本資訊 ---
 st.set_page_config(
@@ -47,10 +48,13 @@ st.markdown("""
         margin-bottom: 5px;
         font-size: 14px;
     }
-    .error-msg {
-        color: #e17055;
+    .debug-info {
         font-size: 12px;
-        margin-top: 5px;
+        color: #999;
+        margin-top: 50px;
+        text-align: center;
+        border-top: 1px solid #eee;
+        padding-top: 10px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -59,6 +63,36 @@ st.markdown("""
 api_key = st.secrets.get("GEMINI_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
+
+# --- 核心功能 0：自動尋找可用的模型 (關鍵修復) ---
+@st.cache_resource
+def get_valid_model_name():
+    if not api_key:
+        return None
+    
+    try:
+        # 直接問 API 哪些模型可以用
+        valid_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                valid_models.append(m.name)
+        
+        # 優先順序策略
+        preferences = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-1.0-pro', 'models/gemini-pro']
+        
+        for pref in preferences:
+            if pref in valid_models:
+                return pref
+        
+        # 如果都沒有，就回傳清單中的第一個
+        if valid_models:
+            return valid_models[0]
+            
+        return 'gemini-pro' # 萬一真的什麼都沒抓到，只好用猜的
+        
+    except Exception as e:
+        print(f"List models failed: {e}")
+        return 'gemini-pro' # 發生錯誤時的備案
 
 # --- 核心功能 1：抓取新聞 (快取 1 小時) ---
 @st.cache_data(ttl=3600)
@@ -96,9 +130,9 @@ def get_six_capital_news():
     
     return news_items
 
-# --- 核心功能 2：AI 分析 (智能切換模型) ---
+# --- 核心功能 2：AI 分析 (使用自動偵測到的模型) ---
 @st.cache_data(show_spinner=False)
-def analyze_with_ai(news_title):
+def analyze_with_ai(news_title, model_name):
     if not api_key:
         return "無法分析 (缺少 API Key)"
         
@@ -111,29 +145,25 @@ def analyze_with_ai(news_title):
     2. **【受眾畫像】**：誰會對這則新聞最有感？
     """
     
-    # 策略：優先使用 gemini-1.5-flash (快)，失敗則切換 gemini-pro (穩)
     try:
         time.sleep(1) # 安全緩衝
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel(model_name)
         response = model.generate_content(prompt)
         return response.text
-    except Exception as e_flash:
-        try:
-            # 如果 Flash 失敗，切換到 Pro 模型
-            model = genai.GenerativeModel('gemini-pro')
-            response = model.generate_content(prompt)
-            return response.text + "\n\n*(備註：使用相容模式生成)*"
-        except Exception as e_pro:
-            # 顯示詳細錯誤，方便除錯
-            return f"⚠️ 分析失敗\nFlash 錯誤: {e_flash}\nPro 錯誤: {e_pro}"
+    except Exception as e:
+        return f"⚠️ 分析失敗 ({str(e)})"
 
 # --- 網頁介面呈現 ---
 st.title("🧠 六都房市 AI 戰情室")
-st.caption(f"資料來源：Google News | 智能模型：Gemini Auto-Switch")
+
+# 1. 取得目前可用的模型名稱
+current_model_name = get_valid_model_name()
+st.caption(f"資料來源：Google News | 🤖 AI 模型：{current_model_name or '未偵測'}")
 
 # 手動刷新按鈕
 if st.button("🔄 強制刷新 (清除快取)"):
     st.cache_data.clear()
+    st.cache_resource.clear() # 清除模型偵測快取
     st.rerun()
 
 # 主程式流程
@@ -154,9 +184,12 @@ try:
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # 呼叫 AI 分析 (有快取)
-                ai_result = analyze_with_ai(news['title'])
-                
+                # 呼叫 AI 分析 (傳入自動偵測到的模型名稱)
+                if current_model_name:
+                    ai_result = analyze_with_ai(news['title'], current_model_name)
+                else:
+                    ai_result = "⚠️ 無法連接 AI 模型，請檢查下方的版本資訊。"
+
                 # 顯示 AI 結果
                 st.markdown(f"""
                     <div class="ai-box">
@@ -169,6 +202,19 @@ try:
                 """, unsafe_allow_html=True)
             
             st.success("✅ 分析完成！")
-            
+
 except Exception as e:
     st.error(f"系統發生錯誤：{e}")
+
+# --- 底部診斷資訊 (幫助抓蟲) ---
+try:
+    genai_version = genai.__version__
+except:
+    genai_version = "未知 (版本過舊)"
+
+st.markdown(f"""
+<div class="debug-info">
+    系統診斷資訊：Streamlit v{st.__version__} | Google GenAI v{genai_version}<br>
+    如果 GenAI 版本低於 0.7.0，請再次檢查 requirements.txt 並重啟 App。
+</div>
+""", unsafe_allow_html=True)
