@@ -124,7 +124,8 @@ def analyze_with_ai(news_title):
             response = model.generate_content(prompt)
             return response.text + "\n\n*(備註：使用相容模式生成)*"
         except Exception as e_pro:
-            return f"AI 分析暫時休息中 (請確認 requirements.txt 已設定 >=0.7.0 並已重啟 App)"
+            # 顯示詳細錯誤，方便除錯
+            return f"⚠️ 分析失敗\nFlash 錯誤: {e_flash}\nPro 錯誤: {e_pro}"
 
 # --- 網頁介面呈現 ---
 st.title("🧠 六都房市 AI 戰情室")
