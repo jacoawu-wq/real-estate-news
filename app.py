@@ -7,7 +7,7 @@ import sys
 
 # --- 設定網頁基本資訊 ---
 st.set_page_config(
-    page_title="六都房市新聞 AI 戰情室",
+    page_title="六都房市 AI 戰情室",
     page_icon="🧠",
     layout="centered"
 )
@@ -64,7 +64,7 @@ api_key = st.secrets.get("GEMINI_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
 
-# --- 核心功能 0：自動尋找可用的模型 (邏輯修正版) ---
+# --- 核心功能 0：自動尋找可用的模型 (防呆機制) ---
 @st.cache_resource
 def get_valid_model_name():
     if not api_key:
@@ -100,12 +100,12 @@ def get_valid_model_name():
             if 'pro' in m.lower() and 'exp' not in m.lower():
                 return m
 
-        # 6. 真的都沒找到，直接回傳預設值 (不要回傳 valid_models[0]，因為那可能是實驗版)
+        # 6. 保底回傳
         return 'models/gemini-1.5-flash'
         
     except Exception as e:
         print(f"List models failed: {e}")
-        return 'models/gemini-1.5-flash' # 發生錯誤時的保險
+        return 'models/gemini-1.5-flash'
 
 # --- 核心功能 1：抓取新聞 (快取 1 小時) ---
 @st.cache_data(ttl=3600)
@@ -143,7 +143,7 @@ def get_six_capital_news():
     
     return news_items
 
-# --- 核心功能 2：AI 分析 (使用自動偵測到的模型) ---
+# --- 核心功能 2：AI 分析 (加入自動重試機制) ---
 @st.cache_data(show_spinner=False)
 def analyze_with_ai(news_title, model_name):
     if not api_key:
@@ -158,20 +158,38 @@ def analyze_with_ai(news_title, model_name):
     2. **【受眾畫像】**：誰會對這則新聞最有感？
     """
     
-    try:
-        time.sleep(1.5) # 增加緩衝時間至 1.5 秒，避免 429 錯誤
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        # 如果遇到 429 錯誤，顯示更友善的訊息
-        error_str = str(e)
-        if "429" in error_str:
-            return "⚠️ AI 分析忙碌中 (流量限制)，請稍後再試。"
-        return f"⚠️ 分析失敗 ({error_str})"
+    # --- 自動重試機制 (Retry Logic) ---
+    max_retries = 3  # 最多試 3 次
+    
+    for attempt in range(max_retries):
+        try:
+            # 1. 基礎緩衝：每次請求前先休息 2 秒 (比之前的 1.5 秒更長)
+            time.sleep(2)
+            
+            # 2. 呼叫 AI
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            return response.text
+            
+        except Exception as e:
+            error_str = str(e)
+            
+            # 如果是流量限制 (429)，且還有重試機會
+            if "429" in error_str and attempt < max_retries - 1:
+                # 遇到忙碌，休息久一點 (5秒) 再試
+                time.sleep(5)
+                continue # 跳回迴圈開頭再試一次
+            
+            # 如果試了 3 次還是不行，或者遇到其他錯誤，才回傳失敗訊息
+            if attempt == max_retries - 1:
+                if "429" in error_str:
+                    return "⚠️ AI 分析忙碌中 (Google 流量限制)，請稍後再試。"
+                return f"⚠️ 分析失敗 ({error_str})"
+    
+    return "⚠️ 未知錯誤"
 
 # --- 網頁介面呈現 ---
-st.title("🧠 六都房市新聞 AI 戰情室")
+st.title("🧠 六都房市 AI 戰情室")
 
 # 1. 取得目前可用的模型名稱
 current_model_name = get_valid_model_name()
@@ -180,19 +198,21 @@ st.caption(f"資料來源：Google News | 🤖 AI 模型：{current_model_name o
 # 手動刷新按鈕
 if st.button("🔄 強制刷新 (清除快取)"):
     st.cache_data.clear()
-    st.cache_resource.clear() # 清除模型偵測快取
+    st.cache_resource.clear()
     st.rerun()
 
 # 主程式流程
 try:
-    with st.spinner('正在搜尋並分析新聞... (首次載入可能需要 30 秒)'):
+    with st.spinner('正在搜尋並分析新聞... (首次載入約需 40 秒，請耐心等候)'):
         news_data = get_six_capital_news()
         
         if not news_data:
             st.warning("目前沒有最新新聞。")
         else:
-            for news in news_data:
-                # 顯示新聞卡片
+            # 建立進度條，讓使用者知道還在跑，比較不會焦慮
+            progress_bar = st.progress(0)
+            
+            for i, news in enumerate(news_data):
                 st.markdown(f"""
                 <div class="news-card">
                     <a href="{news['link']}" target="_blank" class="news-title">{news['title']}</a>
@@ -201,13 +221,12 @@ try:
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # 呼叫 AI 分析 (傳入自動偵測到的模型名稱)
+                # 呼叫 AI 分析
                 if current_model_name:
                     ai_result = analyze_with_ai(news['title'], current_model_name)
                 else:
-                    ai_result = "⚠️ 無法連接 AI 模型，請檢查下方的版本資訊。"
+                    ai_result = "⚠️ 無法連接 AI 模型"
 
-                # 顯示 AI 結果
                 st.markdown(f"""
                     <div class="ai-box">
                         <div class="ai-label">✨ AI 智能解析</div>
@@ -217,23 +236,25 @@ try:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+                
+                # 更新進度條
+                progress_bar.progress((i + 1) / len(news_data))
             
+            # 完成後清空進度條
+            progress_bar.empty()
             st.success("✅ 分析完成！")
 
 except Exception as e:
     st.error(f"系統發生錯誤：{e}")
 
-# --- 底部診斷資訊 (幫助抓蟲) ---
+# --- 底部診斷資訊 ---
 try:
     genai_version = genai.__version__
 except:
-    genai_version = "未知 (版本過舊)"
+    genai_version = "未知"
 
 st.markdown(f"""
 <div class="debug-info">
     系統診斷資訊：Streamlit v{st.__version__} | Google GenAI v{genai_version}<br>
-    如果 GenAI 版本低於 0.7.0，請再次檢查 requirements.txt 並重啟 App。
 </div>
 """, unsafe_allow_html=True)
-
-
