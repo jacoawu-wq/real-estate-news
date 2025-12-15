@@ -168,14 +168,16 @@ def analyze_with_ai(news_title, model_name):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            time.sleep(2)
+            # 加大緩衝時間至 3 秒，避免流量限制
+            time.sleep(3)
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
             error_str = str(e)
+            # 如果遇到 429 錯誤，休息更久 (15秒)
             if "429" in error_str and attempt < max_retries - 1:
-                time.sleep(5)
+                time.sleep(15)
                 continue
             if attempt == max_retries - 1:
                 if "429" in error_str:
@@ -213,14 +215,15 @@ def generate_marketing_summary(all_titles, model_name):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            time.sleep(2)
+            # 總結功能請求較大，緩衝 5 秒
+            time.sleep(5)
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
             error_str = str(e)
             if "429" in error_str and attempt < max_retries - 1:
-                time.sleep(5)
+                time.sleep(20) # 休息 20 秒
                 continue
             if attempt == max_retries - 1:
                 return f"⚠️ 總結生成失敗: {error_str}"
@@ -241,7 +244,7 @@ if st.button("🔄 強制刷新 (清除快取)"):
 
 # 主程式流程
 try:
-    with st.spinner('正在搜尋並分析新聞... (首次載入約需 40~60 秒)'):
+    with st.spinner('正在搜尋並分析新聞... (因增加防呆緩衝，載入約需 50~80 秒)'):
         news_data = get_six_capital_news()
         
         if not news_data:
@@ -308,12 +311,3 @@ st.markdown(f"""
     系統診斷資訊：Streamlit v{st.__version__} | Google GenAI v{genai_version}<br>
 </div>
 """, unsafe_allow_html=True)
-```
-
-### 這次的升級內容：
-1.  **新增 `generate_marketing_summary` 函數**：專門負責把所有新聞標題收集起來，一次丟給 AI 做綜合分析。
-2.  **指定的輸出格式**：我明確要求 AI 用 **Markdown 表格** 呈現，並強制分為「北部、中部、南部」三個類別。
-3.  **指定的行銷欄位**：包括 Google 關鍵字、GDN 受眾、FB 受眾建議，完全符合你的需求。
-4.  **UI 整合**：在所有新聞卡片跑完後，會在最下方自動生成這個大表格。
-
-現在，你只要等待網頁跑完，拉到最下面，就可以直接把那張表複製下來給行銷團隊執行了！🚀
