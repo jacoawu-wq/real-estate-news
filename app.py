@@ -74,10 +74,13 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 設定 AI ---
-# 回復到最單純的單一 Key 設定
-api_key = st.secrets.get("GEMINI_API_KEY")
+# 自動相容：無論 Secrets 是設成 GEMINI_API_KEY 還是 GEMINI_API_KEY_NEWS，都能自動抓到
+api_key = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY_NEWS") or st.secrets.get("GEMINI_API_KEY_SUMMARY")
+
 if api_key:
     genai.configure(api_key=api_key)
+else:
+    st.error("❌ 找不到 API Key！請檢查 Streamlit Secrets 設定。")
 
 # --- 核心功能 0：自動尋找可用的模型 (防呆機制) ---
 @st.cache_resource
