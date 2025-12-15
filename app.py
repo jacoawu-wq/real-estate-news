@@ -225,15 +225,15 @@ def analyze_with_ai(news_title, model_name):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 緩衝時間 5 秒 (使用專用 Key 1)
-            time.sleep(5)
+            # 因有雙 Key 分流，縮短緩衝時間至 2 秒
+            time.sleep(2)
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
             error_str = str(e)
             if "429" in error_str and attempt < max_retries - 1:
-                time.sleep(20)
+                time.sleep(10) # 發生錯誤時的重試等待也可以縮短一點
                 continue
             if attempt == max_retries - 1:
                 if "429" in error_str:
@@ -273,15 +273,15 @@ def generate_marketing_summary(all_titles, model_name):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 總結功能 (使用專用 Key 2)
-            time.sleep(10)
+            # 總結功能使用全新 Key，緩衝 2 秒即可
+            time.sleep(2)
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
             error_str = str(e)
             if "429" in error_str and attempt < max_retries - 1:
-                time.sleep(30) # 休息 30 秒
+                time.sleep(10) # 休息 10 秒
                 continue
             if attempt == max_retries - 1:
                 return f"⚠️ 總結生成失敗: {error_str}"
@@ -292,7 +292,7 @@ st.title("🧠 六都房市 AI 戰情室")
 
 # 1. 取得目前可用的模型名稱
 current_model_name = get_valid_model_name()
-st.caption(f"資料來源：Google News | 🤖 AI 模型：{current_model_name or '未偵測'} | 🔑 雙鑰匙架構")
+st.caption(f"資料來源：Google News | 🤖 AI 模型：{current_model_name or '未偵測'} | 🔑 雙鑰匙加速架構")
 
 # 手動刷新按鈕
 if st.button("🔄 強制刷新 (清除快取)"):
@@ -302,7 +302,7 @@ if st.button("🔄 強制刷新 (清除快取)"):
 
 # 主程式流程
 try:
-    with st.spinner('正在搜尋並分析新聞... (因增加防呆緩衝，載入約需 1~2 分鐘，請耐心等候)'):
+    with st.spinner('正在搜尋並分析新聞... (因雙鑰匙加速，載入約需 30~50 秒)'):
         news_data = get_six_capital_news()
         
         if not news_data:
