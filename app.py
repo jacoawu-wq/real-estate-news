@@ -214,16 +214,16 @@ def analyze_with_ai(news_title, model_name):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 加大緩衝時間至 3 秒，避免流量限制
-            time.sleep(3)
+            # 關鍵修改：將緩衝時間延長至 5 秒，確保不超過每分鐘 15 次的限制
+            time.sleep(5)
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
             error_str = str(e)
-            # 如果遇到 429 錯誤，休息更久 (15秒)
+            # 如果遇到 429 錯誤，休息更久 (20秒)
             if "429" in error_str and attempt < max_retries - 1:
-                time.sleep(15)
+                time.sleep(20)
                 continue
             if attempt == max_retries - 1:
                 if "429" in error_str:
@@ -231,7 +231,7 @@ def analyze_with_ai(news_title, model_name):
                 return f"⚠️ 分析失敗 ({error_str})"
     return "⚠️ 未知錯誤"
 
-# --- 核心功能 3：AI 總結行銷策略表 (修改為六都版) ---
+# --- 核心功能 3：AI 總結行銷策略表 (六都版) ---
 @st.cache_data(show_spinner=False)
 def generate_marketing_summary(all_titles, model_name):
     if not api_key:
@@ -260,15 +260,15 @@ def generate_marketing_summary(all_titles, model_name):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 總結功能請求較大，緩衝 5 秒
-            time.sleep(5)
+            # 總結功能請求較大，且因為前面已經跑了10次，這裡休息久一點 (10秒)
+            time.sleep(10)
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
             error_str = str(e)
             if "429" in error_str and attempt < max_retries - 1:
-                time.sleep(20) # 休息 20 秒
+                time.sleep(30) # 休息 30 秒
                 continue
             if attempt == max_retries - 1:
                 return f"⚠️ 總結生成失敗: {error_str}"
@@ -289,7 +289,7 @@ if st.button("🔄 強制刷新 (清除快取)"):
 
 # 主程式流程
 try:
-    with st.spinner('正在搜尋並分析新聞... (因增加防呆緩衝，載入約需 50~80 秒)'):
+    with st.spinner('正在搜尋並分析新聞... (因增加防呆緩衝，載入約需 1~2 分鐘，請耐心等候)'):
         news_data = get_six_capital_news()
         
         if not news_data:
