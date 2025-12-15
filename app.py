@@ -128,7 +128,7 @@ api_key_summary = st.secrets.get("GEMINI_API_KEY_SUMMARY") or st.secrets.get("GE
 if api_key_news:
     genai.configure(api_key=api_key_news)
 
-# --- 核心功能 0：自動尋找可用的模型 (防呆機制) ---
+# --- 核心功能 0：自動尋找可用的模型 (加速版) ---
 @st.cache_resource
 def get_valid_model_name():
     # 使用 api_key_news 來偵測模型
@@ -144,21 +144,25 @@ def get_valid_model_name():
             if 'generateContent' in m.supported_generation_methods:
                 valid_models.append(m.name)
         
+        # 優先順序：強制優先使用 Flash 系列以求速度
         preferences = [
-            'models/gemini-1.5-flash',
-            'models/gemini-1.5-pro', 
-            'models/gemini-1.0-pro', 
-            'models/gemini-pro'
+            'models/gemini-1.5-flash',       # 最穩定快速
+            'models/gemini-2.0-flash-exp',   # 新版極速 (如果有的話)
+            'models/gemini-1.5-flash-8b',    # 輕量版
+            'models/gemini-1.5-pro',
+            'models/gemini-1.0-pro'
         ]
         
         for pref in preferences:
             if pref in valid_models:
                 return pref
         
+        # 關鍵字搜尋：優先找 Flash
         for m in valid_models:
-            if 'flash' in m.lower() and 'exp' not in m.lower():
+            if 'flash' in m.lower(): # 這裡放寬限制，盡量找 Flash
                 return m
                 
+        # 最後才找 Pro
         for m in valid_models:
             if 'pro' in m.lower() and 'exp' not in m.lower():
                 return m
@@ -225,15 +229,15 @@ def analyze_with_ai(news_title, model_name):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 因有雙 Key 分流，縮短緩衝時間至 2 秒
-            time.sleep(2)
+            # 因有雙 Key 分流，縮短緩衝時間至 1.5 秒以加快速度
+            time.sleep(1.5)
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
             error_str = str(e)
             if "429" in error_str and attempt < max_retries - 1:
-                time.sleep(10) # 發生錯誤時的重試等待也可以縮短一點
+                time.sleep(5) # 縮短重試等待
                 continue
             if attempt == max_retries - 1:
                 if "429" in error_str:
@@ -281,7 +285,7 @@ def generate_marketing_summary(all_titles, model_name):
         except Exception as e:
             error_str = str(e)
             if "429" in error_str and attempt < max_retries - 1:
-                time.sleep(10) # 休息 10 秒
+                time.sleep(10) 
                 continue
             if attempt == max_retries - 1:
                 return f"⚠️ 總結生成失敗: {error_str}"
@@ -292,6 +296,7 @@ st.title("🧠 六都房市 AI 戰情室")
 
 # 1. 取得目前可用的模型名稱
 current_model_name = get_valid_model_name()
+# 在這裡顯示實際使用的模型，方便檢查是否為 1.5-flash
 st.caption(f"資料來源：Google News | 🤖 AI 模型：{current_model_name or '未偵測'} | 🔑 雙鑰匙加速架構")
 
 # 手動刷新按鈕
@@ -302,7 +307,8 @@ if st.button("🔄 強制刷新 (清除快取)"):
 
 # 主程式流程
 try:
-    with st.spinner('正在搜尋並分析新聞... (因雙鑰匙加速，載入約需 30~50 秒)'):
+    # 這裡會顯示載入進度
+    with st.spinner(f'正在使用 {current_model_name} 分析新聞... (約需 20~30 秒)'):
         news_data = get_six_capital_news()
         
         if not news_data:
