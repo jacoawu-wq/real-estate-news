@@ -3,7 +3,7 @@ import feedparser
 import google.generativeai as genai
 from datetime import datetime
 import time
-import sys
+import re
 
 # --- 設定網頁基本資訊 ---
 st.set_page_config(
@@ -12,15 +12,10 @@ st.set_page_config(
     layout="centered"
 )
 
-# --- CSS 美化樣式 (升級版：專業表格) ---
+# --- CSS 美化樣式 ---
 st.markdown("""
     <style>
-    /* 全局字體設定 */
-    body {
-        font-family: 'Noto Sans TC', sans-serif;
-    }
-
-    /* 新聞卡片樣式 */
+    body { font-family: 'Noto Sans TC', sans-serif; }
     .news-card {
         background-color: #ffffff;
         padding: 20px;
@@ -30,9 +25,7 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         transition: transform 0.2s;
     }
-    .news-card:hover {
-        transform: translateY(-2px);
-    }
+    .news-card:hover { transform: translateY(-2px); }
     .news-title {
         font-size: 20px;
         font-weight: bold;
@@ -41,12 +34,7 @@ st.markdown("""
         display: block;
         margin-bottom: 10px;
     }
-    .news-title:hover {
-        text-decoration: underline;
-        color: #2e86de;
-    }
-    
-    /* AI 分析框樣式 */
+    .news-title:hover { text-decoration: underline; color: #2e86de; }
     .ai-box {
         background-color: #f8f9fa;
         border-radius: 8px;
@@ -60,319 +48,216 @@ st.markdown("""
         margin-bottom: 5px;
         font-size: 14px;
     }
-
-    /* --- 表格美化核心 CSS --- */
-    /* 針對 Streamlit 渲染出的 Markdown 表格進行美化 */
-    div[data-testid="stMarkdownContainer"] table {
-        width: 100%;
-        border-collapse: collapse;
-        margin: 25px 0;
-        font-size: 16px;
-        font-family: 'Noto Sans TC', sans-serif;
-        box-shadow: 0 0 20px rgba(0, 0, 0, 0.08); /* 柔和陰影 */
-        border-radius: 10px;
-        overflow: hidden; /* 確保圓角不被直角單元格蓋住 */
-    }
-
-    /* 表頭樣式 */
-    div[data-testid="stMarkdownContainer"] thead tr {
-        background-color: #2e86de; /* 專業藍 */
-        color: #ffffff;
-        text-align: left;
-        font-weight: bold;
-    }
-
-    /* 單元格間距與格線 */
-    div[data-testid="stMarkdownContainer"] th, 
-    div[data-testid="stMarkdownContainer"] td {
-        padding: 15px 20px; /* 增加呼吸感 */
-        border-bottom: 1px solid #eeeeee;
-        line-height: 1.6;
-    }
-
-    /* 斑馬紋 (偶數行變色) */
-    div[data-testid="stMarkdownContainer"] tbody tr:nth-of-type(even) {
-        background-color: #f8f9fa; 
-    }
-
-    /* 滑鼠懸停效果 */
-    div[data-testid="stMarkdownContainer"] tbody tr:hover {
-        background-color: #e6f7ff; /* 淺藍色 highlight */
-        cursor: default;
-        transition: background-color 0.2s;
-    }
-
-    /* 最後一行加粗底線 */
-    div[data-testid="stMarkdownContainer"] tbody tr:last-of-type {
-        border-bottom: 3px solid #2e86de;
-    }
     
-    /* 底部除錯資訊 */
-    .debug-info {
-        font-size: 12px;
-        color: #999;
-        margin-top: 50px;
-        text-align: center;
-        border-top: 1px solid #eee;
-        padding-top: 10px;
+    /* 表格樣式優化 */
+    div[data-testid="stMarkdownContainer"] table {
+        width: 100%; border-collapse: collapse; margin: 25px 0;
+        font-size: 16px; box-shadow: 0 0 20px rgba(0,0,0,0.08); border-radius: 10px; overflow: hidden;
     }
+    div[data-testid="stMarkdownContainer"] thead tr { background-color: #2e86de; color: #ffffff; text-align: left; }
+    div[data-testid="stMarkdownContainer"] th, div[data-testid="stMarkdownContainer"] td {
+        padding: 12px 15px; border-bottom: 1px solid #eeeeee; line-height: 1.5;
+    }
+    div[data-testid="stMarkdownContainer"] tbody tr:nth-of-type(even) { background-color: #f8f9fa; }
+    div[data-testid="stMarkdownContainer"] tbody tr:hover { background-color: #e6f7ff; }
+
+    .debug-info { font-size: 12px; color: #999; margin-top: 50px; text-align: center; border-top: 1px solid #eee; padding-top: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 設定 AI (支援雙 Key 架構) ---
-# 邏輯：優先讀取專用 Key，如果沒有設定，則回退讀取通用 Key (GEMINI_API_KEY)
+# --- 設定 AI (雙鑰匙架構) ---
 api_key_news = st.secrets.get("GEMINI_API_KEY_NEWS") or st.secrets.get("GEMINI_API_KEY")
 api_key_summary = st.secrets.get("GEMINI_API_KEY_SUMMARY") or st.secrets.get("GEMINI_API_KEY")
 
-# 預設先使用 News Key 初始化
 if api_key_news:
     genai.configure(api_key=api_key_news)
 
-# --- 核心功能 0：自動尋找可用的模型 (加速版) ---
+# --- 核心功能 0：自動尋找可用的模型 ---
 @st.cache_resource
 def get_valid_model_name():
-    # 使用 api_key_news 來偵測模型
-    if not api_key_news:
-        return None
-    
-    # 確保使用 News Key 進行偵測
+    if not api_key_news: return None
     genai.configure(api_key=api_key_news)
-    
     try:
         valid_models = []
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
                 valid_models.append(m.name)
         
-        # 優先順序：強制優先使用 Flash 系列以求速度
-        preferences = [
-            'models/gemini-1.5-flash',       # 最穩定快速
-            'models/gemini-2.0-flash-exp',   # 新版極速 (如果有的話)
-            'models/gemini-1.5-flash-8b',    # 輕量版
-            'models/gemini-1.5-pro',
-            'models/gemini-1.0-pro'
-        ]
-        
+        # 優先使用 Flash 系列以求速度
+        preferences = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash-exp', 'models/gemini-1.5-pro', 'models/gemini-1.0-pro']
         for pref in preferences:
-            if pref in valid_models:
-                return pref
-        
-        # 關鍵字搜尋：優先找 Flash
+            if pref in valid_models: return pref
         for m in valid_models:
-            if 'flash' in m.lower(): # 這裡放寬限制，盡量找 Flash
-                return m
-                
-        # 最後才找 Pro
-        for m in valid_models:
-            if 'pro' in m.lower() and 'exp' not in m.lower():
-                return m
-
+            if 'flash' in m.lower(): return m
         return 'models/gemini-1.5-flash'
-        
-    except Exception as e:
-        print(f"List models failed: {e}")
+    except:
         return 'models/gemini-1.5-flash'
 
-# --- 核心功能 1：抓取新聞 (快取 1 小時) ---
+# --- 核心功能 1：抓取新聞 ---
 @st.cache_data(ttl=3600)
 def get_six_capital_news():
     base_url = "https://news.google.com/rss/search?q="
     query = "(房地產+OR+房市+OR+建案+OR+重劃區)+AND+(台北+OR+新北+OR+桃園+OR+台中+OR+台南+OR+高雄)+when:1d"
     params = "&hl=zh-TW&gl=TW&ceid=TW:zh-TW"
-    
     feed = feedparser.parse(base_url + query + params)
     news_items = []
-
     for entry in feed.entries[:10]:
         title = entry.title
         link = entry.link
         published = entry.published_parsed
-        
-        if published:
-            pub_date = datetime(*published[:6]).strftime('%m/%d %H:%M')
-        else:
-            pub_date = "最新"
-
-        if " - " in title:
-            title_text, source = title.rsplit(" - ", 1)
-        else:
-            title_text = title
-            source = "新聞媒體"
-
-        news_items.append({
-            "title": title_text,
-            "link": link,
-            "source": source,
-            "date": pub_date
-        })
-    
+        pub_date = datetime(*published[:6]).strftime('%m/%d %H:%M') if published else "最新"
+        title_text = title.rsplit(" - ", 1)[0] if " - " in title else title
+        source = title.rsplit(" - ", 1)[1] if " - " in title else "新聞媒體"
+        news_items.append({"title": title_text, "link": link, "source": source, "date": pub_date})
     return news_items
 
-# --- 核心功能 2：AI 單則分析 (使用 Key 1) ---
+# --- 核心功能 2：AI 批次分析 (極速版核心) ---
 @st.cache_data(show_spinner=False)
-def analyze_with_ai(news_title, model_name):
-    if not api_key_news:
-        return "無法分析 (缺少 API Key)"
-    
-    # ★ 強制切換為 News 專用 Key
+def analyze_news_batch(news_titles, model_name):
+    if not api_key_news: return {}
     genai.configure(api_key=api_key_news)
-        
-    prompt = f"""
-    你是一位專業的台灣房地產分析師。請針對以下新聞標題進行分析：
-    新聞標題：「{news_title}」
     
-    請簡潔分析（各約100字）：
-    1. **【產業觀點】**：對市場的影響或趨勢。
-    2. **【受眾畫像】**：誰會對這則新聞最有感？
+    # 組合批次指令
+    titles_list_str = ""
+    for idx, title in enumerate(news_titles):
+        titles_list_str += f"第{idx+1}則：{title}\n"
+    
+    prompt = f"""
+    你是一位專業房產分析師。請一次分析以下 {len(news_titles)} 則新聞標題。
+    
+    新聞清單：
+    {titles_list_str}
+
+    請依序輸出分析，格式必須嚴格如下（請勿改變格式，方便程式讀取）：
+    
+    ===第1則===
+    **【產業觀點】**...內容...
+    **【受眾畫像】**...內容...
+    ===第2則===
+    **【產業觀點】**...內容...
+    **【受眾畫像】**...內容...
+    
+    (以此類推直到第{len(news_titles)}則)
+    請保持簡潔，每點分析約 80 字。
     """
     
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            # 因有雙 Key 分流，縮短緩衝時間至 1.5 秒以加快速度
-            time.sleep(1.5)
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            error_str = str(e)
-            if "429" in error_str and attempt < max_retries - 1:
-                time.sleep(5) # 縮短重試等待
-                continue
-            if attempt == max_retries - 1:
-                if "429" in error_str:
-                    return "⚠️ AI 分析忙碌中 (流量限制)，請稍後再試。"
-                return f"⚠️ 分析失敗 ({error_str})"
-    return "⚠️ 未知錯誤"
+    try:
+        # 批次請求只需 1 次，所以可以稍微等待確保穩定，但整體比跑 10 次快非常多
+        time.sleep(1) 
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(prompt)
+        text = response.text
+        
+        # 解析回傳的文字，拆解成字典
+        analysis_dict = {}
+        # 使用正規表達式切分
+        parts = re.split(r"===第\d+則===", text)
+        
+        # parts[0] 通常是空的或開場白，從 parts[1] 開始是第1則
+        for i, part in enumerate(parts[1:]):
+            if i < len(news_titles):
+                analysis_dict[news_titles[i]] = part.strip()
+                
+        return analysis_dict
+        
+    except Exception as e:
+        return {"error": str(e)}
 
-# --- 核心功能 3：AI 總結行銷策略表 (使用 Key 2) ---
+# --- 核心功能 3：AI 總結行銷策略表 ---
 @st.cache_data(show_spinner=False)
 def generate_marketing_summary(all_titles, model_name):
-    if not api_key_summary:
-        return "無法生成總結 (缺少 Summary Key)"
-
-    # ★ 強制切換為 Summary 專用 Key
-    genai.configure(api_key=api_key_summary)
-
-    # 將所有標題組合成一個清單
-    titles_text = "\n".join([f"- {t}" for t in all_titles])
+    if not api_key_summary: return "無法生成總結"
+    genai.configure(api_key=api_key_summary) # 切換 Key 2
     
+    titles_text = "\n".join([f"- {t}" for t in all_titles])
     prompt = f"""
-    你是一位資深的數位行銷顧問，專精於房地產廣告投放。
-    請閱讀以下今日的熱門房地產新聞標題：
+    你是一位數位行銷顧問。請根據以下今日房地產新聞：
     {titles_text}
-
-    請根據這些新聞內容，彙整出一份「今日廣告投放策略建議表」。
-    請將建議詳細分為六個區域（六都）：「台北市」、「新北市」、「桃園市」、「台中市」、「台南市」、「高雄市」。
-    如果新聞內容沒有特定區域，請根據其屬性歸類到最適合的區域，或列為「全台通用」。
-
-    請直接輸出一個 Markdown 格式的表格 (不要使用 HTML 標籤，也不要包含任何開場白或結語)。
-    表格欄位必須包含：
+    
+    彙整出一份「今日廣告投放策略建議表」。
+    請將建議分為六個區域（六都）：台北、新北、桃園、台中、台南、高雄。
+    
+    直接輸出 Markdown 表格，欄位包含：
     1. **六都區域**
-    2. **Google廣告關鍵字建議** (3-5組)
-    3. **Google聯播網受眾建議** (具體描述)
-    4. **FB廣告受眾建議** (具體描述)
+    2. **Google廣告關鍵字**
+    3. **Google聯播網受眾**
+    4. **FB廣告受眾**
     """
+    
+    try:
+        time.sleep(2)
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"⚠️ 總結生成失敗: {e}"
 
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            # 總結功能使用全新 Key，緩衝 2 秒即可
-            time.sleep(2)
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            error_str = str(e)
-            if "429" in error_str and attempt < max_retries - 1:
-                time.sleep(10) 
-                continue
-            if attempt == max_retries - 1:
-                return f"⚠️ 總結生成失敗: {error_str}"
-    return "⚠️ 無法生成總結"
-
-# --- 網頁介面呈現 ---
+# --- 主程式 ---
 st.title("🧠 六都房市 AI 戰情室")
+model_name = get_valid_model_name()
+st.caption(f"資料來源：Google News | 🚀 極速批次核心 | AI 模型：{model_name or '未偵測'}")
 
-# 1. 取得目前可用的模型名稱
-current_model_name = get_valid_model_name()
-# 在這裡顯示實際使用的模型，方便檢查是否為 1.5-flash
-st.caption(f"資料來源：Google News | 🤖 AI 模型：{current_model_name or '未偵測'} | 🔑 雙鑰匙加速架構")
-
-# 手動刷新按鈕
 if st.button("🔄 強制刷新 (清除快取)"):
     st.cache_data.clear()
     st.cache_resource.clear()
     st.rerun()
 
-# 主程式流程
 try:
-    # 這裡會顯示載入進度
-    with st.spinner(f'正在使用 {current_model_name} 分析新聞... (約需 20~30 秒)'):
+    with st.spinner('正在搜尋新聞...'):
         news_data = get_six_capital_news()
-        
-        if not news_data:
-            st.warning("目前沒有最新新聞。")
-        else:
-            # 1. 顯示單則新聞分析
-            progress_bar = st.progress(0)
-            all_titles_for_summary = [] # 收集標題給總結用
+    
+    if not news_data:
+        st.warning("目前沒有最新新聞。")
+    else:
+        # 1. 執行極速批次分析 (1 次請求搞定 10 則)
+        with st.spinner('🚀 AI 正在批次分析 10 則新聞 (速度提升 500%)...'):
+            all_titles = [n['title'] for n in news_data]
+            if model_name:
+                batch_results = analyze_news_batch(all_titles, model_name)
+            else:
+                batch_results = {}
 
-            for i, news in enumerate(news_data):
-                all_titles_for_summary.append(news['title']) # 收集標題
-                
-                st.markdown(f"""
-                <div class="news-card">
-                    <a href="{news['link']}" target="_blank" class="news-title">{news['title']}</a>
-                    <div style="color:#666; font-size:13px; margin-bottom:10px;">
-                        📰 {news['source']} | 🕒 {news['date']}
-                    </div>
-                """, unsafe_allow_html=True)
-                
-                if current_model_name:
-                    ai_result = analyze_with_ai(news['title'], current_model_name)
-                else:
-                    ai_result = "⚠️ 無法連接 AI 模型"
-
-                st.markdown(f"""
-                    <div class="ai-box">
-                        <div class="ai-label">✨ AI 智能解析</div>
-                        <div style="font-size: 15px; line-height: 1.6; color: #2d3436;">
-                            {ai_result.replace(chr(10), '<br>')}
-                        </div>
+        # 2. 顯示結果
+        for news in news_data:
+            st.markdown(f"""
+            <div class="news-card">
+                <a href="{news['link']}" target="_blank" class="news-title">{news['title']}</a>
+                <div style="color:#666; font-size:13px; margin-bottom:10px;">
+                    📰 {news['source']} | 🕒 {news['date']}
+                </div>
+            """, unsafe_allow_html=True)
+            
+            # 從批次結果中取出對應的分析
+            analysis = batch_results.get(news['title'], "⚠️ 分析資料讀取失敗 (可能 AI 回傳格式有誤)")
+            if "error" in batch_results:
+                analysis = f"⚠️ AI 忙碌中: {batch_results['error']}"
+            
+            st.markdown(f"""
+                <div class="ai-box">
+                    <div class="ai-label">✨ AI 智能解析</div>
+                    <div style="font-size: 15px; line-height: 1.6; color: #2d3436;">
+                        {analysis.replace(chr(10), '<br>')}
                     </div>
                 </div>
-                """, unsafe_allow_html=True)
-                
-                progress_bar.progress((i + 1) / len(news_data))
-            
-            progress_bar.empty()
-            
-            # 2. 顯示行銷策略總表 (新增區塊)
-            st.markdown("---") # 分隔線
-            st.markdown("### 📊 AI 每日行銷策略總結 (六都分區)")
-            
-            with st.spinner('AI 正在彙整全台廣告策略建議... (切換專用 Key 2)'):
-                if current_model_name and all_titles_for_summary:
-                    marketing_summary = generate_marketing_summary(all_titles_for_summary, current_model_name)
-                    # 這裡直接顯示 Markdown，CSS 會自動美化它
-                    st.markdown(marketing_summary)
-                else:
-                    st.error("無法生成行銷總結")
+            </div>
+            """, unsafe_allow_html=True)
 
-            st.success("✅ 所有分析完成！")
+        # 3. 顯示總結表
+        st.markdown("---")
+        st.markdown("### 📊 AI 每日行銷策略總結 (六都分區)")
+        with st.spinner('AI 正在制定全台廣告策略...'):
+            if model_name:
+                summary = generate_marketing_summary(all_titles, model_name)
+                st.markdown(summary)
+            else:
+                st.error("無法生成總結")
+        
+        st.success("✅ 全部分析完成！")
 
 except Exception as e:
     st.error(f"系統發生錯誤：{e}")
 
-# --- 底部診斷資訊 ---
-try:
-    genai_version = genai.__version__
-except:
-    genai_version = "未知"
-
-st.markdown(f"""
-<div class="debug-info">
-    系統診斷資訊：Streamlit v{st.__version__} | Google GenAI v{genai_version}<br>
-</div>
-""", unsafe_allow_html=True)
+# --- 底部資訊 ---
+try: ver = genai.__version__
+except: ver = "Unknown"
+st.markdown(f'<div class="debug-info">System: Streamlit v{st.__version__} | GenAI v{ver}</div>', unsafe_allow_html=True)
