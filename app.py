@@ -72,24 +72,29 @@ api_key_summary = st.secrets.get("GEMINI_API_KEY_SUMMARY") or st.secrets.get("GE
 if api_key_news:
     genai.configure(api_key=api_key_news)
 
-# --- 核心功能 0：自動尋找可用的模型 ---
+# --- 核心功能 0：自動尋找可用的模型 (強制鎖定穩定版) ---
 @st.cache_resource
 def get_valid_model_name():
     if not api_key_news: return None
     genai.configure(api_key=api_key_news)
     try:
-        valid_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                valid_models.append(m.name)
+        # 強制指定目前最穩定且免費額度較高的 1.5 Flash
+        # 避免自動抓到 2.5 Flash 或其他實驗版導致 429 錯誤
+        target_model = 'models/gemini-1.5-flash'
         
-        # 優先使用 Flash 系列以求速度
-        preferences = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash-exp', 'models/gemini-1.5-pro', 'models/gemini-1.0-pro']
-        for pref in preferences:
-            if pref in valid_models: return pref
+        # 檢查該模型是否在可用清單中
+        valid_models = [m.name for m in genai.list_models()]
+        
+        if target_model in valid_models:
+            return target_model
+        
+        # 如果找不到 1.5-flash，才嘗試其他模型
+        for m in valid_models:
+            if 'flash' in m.lower() and '1.5' in m.lower(): return m
         for m in valid_models:
             if 'flash' in m.lower(): return m
-        return 'models/gemini-1.5-flash'
+            
+        return 'models/gemini-1.5-flash' # 保底回傳
     except:
         return 'models/gemini-1.5-flash'
 
@@ -141,27 +146,30 @@ def analyze_news_batch(news_titles, model_name):
     請保持簡潔，每點分析約 80 字。
     """
     
-    try:
-        # 批次請求只需 1 次，所以可以稍微等待確保穩定，但整體比跑 10 次快非常多
-        time.sleep(1) 
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(prompt)
-        text = response.text
-        
-        # 解析回傳的文字，拆解成字典
-        analysis_dict = {}
-        # 使用正規表達式切分
-        parts = re.split(r"===第\d+則===", text)
-        
-        # parts[0] 通常是空的或開場白，從 parts[1] 開始是第1則
-        for i, part in enumerate(parts[1:]):
-            if i < len(news_titles):
-                analysis_dict[news_titles[i]] = part.strip()
-                
-        return analysis_dict
-        
-    except Exception as e:
-        return {"error": str(e)}
+    # 加入重試機制
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            time.sleep(1) 
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            text = response.text
+            
+            # 解析回傳的文字
+            analysis_dict = {}
+            parts = re.split(r"===第\d+則===", text)
+            for i, part in enumerate(parts[1:]):
+                if i < len(news_titles):
+                    analysis_dict[news_titles[i]] = part.strip()
+            return analysis_dict
+            
+        except Exception as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                time.sleep(5) # 遇到忙碌多等5秒
+                continue
+            if attempt == max_retries - 1:
+                return {"error": str(e)}
+    return {}
 
 # --- 核心功能 3：AI 總結行銷策略表 ---
 @st.cache_data(show_spinner=False)
@@ -184,13 +192,21 @@ def generate_marketing_summary(all_titles, model_name):
     4. **FB廣告受眾**
     """
     
-    try:
-        time.sleep(2)
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"⚠️ 總結生成失敗: {e}"
+    # 加入重試機制
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            time.sleep(2)
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                time.sleep(10) # 總結如果失敗，等久一點
+                continue
+            if attempt == max_retries - 1:
+                return f"⚠️ 總結生成失敗: {e}"
+    return "⚠️ 無法生成總結"
 
 # --- 主程式 ---
 st.title("🧠 六都房市 AI 戰情室")
@@ -209,8 +225,8 @@ try:
     if not news_data:
         st.warning("目前沒有最新新聞。")
     else:
-        # 1. 執行極速批次分析 (1 次請求搞定 10 則)
-        with st.spinner('🚀 AI 正在批次分析 10 則新聞 (速度提升 500%)...'):
+        # 1. 執行極速批次分析
+        with st.spinner('🚀 AI 正在批次分析 10 則新聞...'):
             all_titles = [n['title'] for n in news_data]
             if model_name:
                 batch_results = analyze_news_batch(all_titles, model_name)
@@ -227,10 +243,9 @@ try:
                 </div>
             """, unsafe_allow_html=True)
             
-            # 從批次結果中取出對應的分析
             analysis = batch_results.get(news['title'], "⚠️ 分析資料讀取失敗 (可能 AI 回傳格式有誤)")
             if "error" in batch_results:
-                analysis = f"⚠️ AI 忙碌中: {batch_results['error']}"
+                analysis = f"⚠️ AI 忙碌中，請稍後再試 ({batch_results['error']})"
             
             st.markdown(f"""
                 <div class="ai-box">
