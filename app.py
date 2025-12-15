@@ -48,6 +48,20 @@ st.markdown("""
         margin-bottom: 5px;
         font-size: 14px;
     }
+    .marketing-table table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    .marketing-table th {
+        background-color: #2e86de;
+        color: white;
+        padding: 10px;
+        text-align: left;
+    }
+    .marketing-table td {
+        border-bottom: 1px solid #ddd;
+        padding: 10px;
+    }
     .debug-info {
         font-size: 12px;
         color: #999;
@@ -71,13 +85,11 @@ def get_valid_model_name():
         return None
     
     try:
-        # 1. 取得所有支援生成的模型清單
         valid_models = []
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
                 valid_models.append(m.name)
         
-        # 2. 設定優先順序 (強制鎖定穩定版，避開 exp 模型)
         preferences = [
             'models/gemini-1.5-flash',
             'models/gemini-1.5-pro', 
@@ -85,22 +97,18 @@ def get_valid_model_name():
             'models/gemini-pro'
         ]
         
-        # 3. 嘗試匹配優先清單
         for pref in preferences:
             if pref in valid_models:
                 return pref
         
-        # 4. 如果優先清單都沒抓到，嘗試找任何 "Flash" 模型 (且不能是 exp 實驗版)
         for m in valid_models:
             if 'flash' in m.lower() and 'exp' not in m.lower():
                 return m
                 
-        # 5. 再找不到，找任何 "Pro" 模型 (且不能是 exp 實驗版)
         for m in valid_models:
             if 'pro' in m.lower() and 'exp' not in m.lower():
                 return m
 
-        # 6. 保底回傳
         return 'models/gemini-1.5-flash'
         
     except Exception as e:
@@ -111,7 +119,6 @@ def get_valid_model_name():
 @st.cache_data(ttl=3600)
 def get_six_capital_news():
     base_url = "https://news.google.com/rss/search?q="
-    # 搜尋條件：六都 + 房地產關鍵字 + 過去24小時
     query = "(房地產+OR+房市+OR+建案+OR+重劃區)+AND+(台北+OR+新北+OR+桃園+OR+台中+OR+台南+OR+高雄)+when:1d"
     params = "&hl=zh-TW&gl=TW&ceid=TW:zh-TW"
     
@@ -143,7 +150,7 @@ def get_six_capital_news():
     
     return news_items
 
-# --- 核心功能 2：AI 分析 (加入自動重試機制) ---
+# --- 核心功能 2：AI 單則分析 ---
 @st.cache_data(show_spinner=False)
 def analyze_with_ai(news_title, model_name):
     if not api_key:
@@ -158,35 +165,66 @@ def analyze_with_ai(news_title, model_name):
     2. **【受眾畫像】**：誰會對這則新聞最有感？
     """
     
-    # --- 自動重試機制 (Retry Logic) ---
-    max_retries = 3  # 最多試 3 次
-    
+    max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 1. 基礎緩衝：每次請求前先休息 2 秒 (比之前的 1.5 秒更長)
             time.sleep(2)
-            
-            # 2. 呼叫 AI
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             return response.text
-            
         except Exception as e:
             error_str = str(e)
-            
-            # 如果是流量限制 (429)，且還有重試機會
             if "429" in error_str and attempt < max_retries - 1:
-                # 遇到忙碌，休息久一點 (5秒) 再試
                 time.sleep(5)
-                continue # 跳回迴圈開頭再試一次
-            
-            # 如果試了 3 次還是不行，或者遇到其他錯誤，才回傳失敗訊息
+                continue
             if attempt == max_retries - 1:
                 if "429" in error_str:
-                    return "⚠️ AI 分析忙碌中 (Google 流量限制)，請稍後再試。"
+                    return "⚠️ AI 分析忙碌中 (流量限制)，請稍後再試。"
                 return f"⚠️ 分析失敗 ({error_str})"
-    
     return "⚠️ 未知錯誤"
+
+# --- 核心功能 3：AI 總結行銷策略表 (新功能) ---
+@st.cache_data(show_spinner=False)
+def generate_marketing_summary(all_titles, model_name):
+    if not api_key:
+        return "無法生成總結"
+
+    # 將所有標題組合成一個清單
+    titles_text = "\n".join([f"- {t}" for t in all_titles])
+    
+    prompt = f"""
+    你是一位資深的數位行銷顧問，專精於房地產廣告投放。
+    請閱讀以下今日的熱門房地產新聞標題：
+    {titles_text}
+
+    請根據這些新聞內容，彙整出一份「今日廣告投放策略建議表」。
+    請將建議分為三個區域：「北部 (北北桃)」、「中部 (台中)」、「南部 (台南/高雄)」。
+    如果新聞內容沒有特定區域，請根據其屬性歸類到最適合的區域，或列為通用建議。
+
+    請直接輸出一個 Markdown 表格，表格欄位必須包含：
+    1. **區域** (北部/中部/南部)
+    2. **Google廣告關鍵字建議** (請列出3-5組高潛力關鍵字)
+    3. **Google聯播網受眾建議** (請具體描述興趣、意向或瀏覽習慣)
+    4. **FB廣告受眾建議** (請建議興趣標籤、行為或人口統計特徵)
+
+    請確保內容具體且可執行，不需要開場白，直接給我表格。
+    """
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            time.sleep(2)
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str and attempt < max_retries - 1:
+                time.sleep(5)
+                continue
+            if attempt == max_retries - 1:
+                return f"⚠️ 總結生成失敗: {error_str}"
+    return "⚠️ 無法生成總結"
 
 # --- 網頁介面呈現 ---
 st.title("🧠 六都房市 AI 戰情室")
@@ -203,16 +241,19 @@ if st.button("🔄 強制刷新 (清除快取)"):
 
 # 主程式流程
 try:
-    with st.spinner('正在搜尋並分析新聞... (首次載入約需 40 秒，請耐心等候)'):
+    with st.spinner('正在搜尋並分析新聞... (首次載入約需 40~60 秒)'):
         news_data = get_six_capital_news()
         
         if not news_data:
             st.warning("目前沒有最新新聞。")
         else:
-            # 建立進度條，讓使用者知道還在跑，比較不會焦慮
+            # 1. 顯示單則新聞分析
             progress_bar = st.progress(0)
-            
+            all_titles_for_summary = [] # 收集標題給總結用
+
             for i, news in enumerate(news_data):
+                all_titles_for_summary.append(news['title']) # 收集標題
+                
                 st.markdown(f"""
                 <div class="news-card">
                     <a href="{news['link']}" target="_blank" class="news-title">{news['title']}</a>
@@ -221,7 +262,6 @@ try:
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # 呼叫 AI 分析
                 if current_model_name:
                     ai_result = analyze_with_ai(news['title'], current_model_name)
                 else:
@@ -237,12 +277,22 @@ try:
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # 更新進度條
                 progress_bar.progress((i + 1) / len(news_data))
             
-            # 完成後清空進度條
             progress_bar.empty()
-            st.success("✅ 分析完成！")
+            
+            # 2. 顯示行銷策略總表 (新增區塊)
+            st.markdown("---") # 分隔線
+            st.markdown("### 📊 AI 每日行銷策略總結 (北中南)")
+            
+            with st.spinner('AI 正在彙整全台廣告策略建議...'):
+                if current_model_name and all_titles_for_summary:
+                    marketing_summary = generate_marketing_summary(all_titles_for_summary, current_model_name)
+                    st.markdown(f'<div class="marketing-table">{marketing_summary}</div>', unsafe_allow_html=True)
+                else:
+                    st.error("無法生成行銷總結")
+
+            st.success("✅ 所有分析完成！")
 
 except Exception as e:
     st.error(f"系統發生錯誤：{e}")
@@ -258,3 +308,12 @@ st.markdown(f"""
     系統診斷資訊：Streamlit v{st.__version__} | Google GenAI v{genai_version}<br>
 </div>
 """, unsafe_allow_html=True)
+```
+
+### 這次的升級內容：
+1.  **新增 `generate_marketing_summary` 函數**：專門負責把所有新聞標題收集起來，一次丟給 AI 做綜合分析。
+2.  **指定的輸出格式**：我明確要求 AI 用 **Markdown 表格** 呈現，並強制分為「北部、中部、南部」三個類別。
+3.  **指定的行銷欄位**：包括 Google 關鍵字、GDN 受眾、FB 受眾建議，完全符合你的需求。
+4.  **UI 整合**：在所有新聞卡片跑完後，會在最下方自動生成這個大表格。
+
+現在，你只要等待網頁跑完，拉到最下面，就可以直接把那張表複製下來給行銷團隊執行了！🚀
