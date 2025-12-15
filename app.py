@@ -119,16 +119,24 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 設定 AI ---
-api_key = st.secrets.get("GEMINI_API_KEY")
-if api_key:
-    genai.configure(api_key=api_key)
+# --- 設定 AI (支援雙 Key 架構) ---
+# 邏輯：優先讀取專用 Key，如果沒有設定，則回退讀取通用 Key (GEMINI_API_KEY)
+api_key_news = st.secrets.get("GEMINI_API_KEY_NEWS") or st.secrets.get("GEMINI_API_KEY")
+api_key_summary = st.secrets.get("GEMINI_API_KEY_SUMMARY") or st.secrets.get("GEMINI_API_KEY")
+
+# 預設先使用 News Key 初始化
+if api_key_news:
+    genai.configure(api_key=api_key_news)
 
 # --- 核心功能 0：自動尋找可用的模型 (防呆機制) ---
 @st.cache_resource
 def get_valid_model_name():
-    if not api_key:
+    # 使用 api_key_news 來偵測模型
+    if not api_key_news:
         return None
+    
+    # 確保使用 News Key 進行偵測
+    genai.configure(api_key=api_key_news)
     
     try:
         valid_models = []
@@ -196,11 +204,14 @@ def get_six_capital_news():
     
     return news_items
 
-# --- 核心功能 2：AI 單則分析 ---
+# --- 核心功能 2：AI 單則分析 (使用 Key 1) ---
 @st.cache_data(show_spinner=False)
 def analyze_with_ai(news_title, model_name):
-    if not api_key:
+    if not api_key_news:
         return "無法分析 (缺少 API Key)"
+    
+    # ★ 強制切換為 News 專用 Key
+    genai.configure(api_key=api_key_news)
         
     prompt = f"""
     你是一位專業的台灣房地產分析師。請針對以下新聞標題進行分析：
@@ -214,14 +225,13 @@ def analyze_with_ai(news_title, model_name):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 關鍵修改：將緩衝時間延長至 5 秒，確保不超過每分鐘 15 次的限制
+            # 緩衝時間 5 秒 (使用專用 Key 1)
             time.sleep(5)
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
             error_str = str(e)
-            # 如果遇到 429 錯誤，休息更久 (20秒)
             if "429" in error_str and attempt < max_retries - 1:
                 time.sleep(20)
                 continue
@@ -231,11 +241,14 @@ def analyze_with_ai(news_title, model_name):
                 return f"⚠️ 分析失敗 ({error_str})"
     return "⚠️ 未知錯誤"
 
-# --- 核心功能 3：AI 總結行銷策略表 (六都版) ---
+# --- 核心功能 3：AI 總結行銷策略表 (使用 Key 2) ---
 @st.cache_data(show_spinner=False)
 def generate_marketing_summary(all_titles, model_name):
-    if not api_key:
-        return "無法生成總結"
+    if not api_key_summary:
+        return "無法生成總結 (缺少 Summary Key)"
+
+    # ★ 強制切換為 Summary 專用 Key
+    genai.configure(api_key=api_key_summary)
 
     # 將所有標題組合成一個清單
     titles_text = "\n".join([f"- {t}" for t in all_titles])
@@ -260,7 +273,7 @@ def generate_marketing_summary(all_titles, model_name):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 總結功能請求較大，且因為前面已經跑了10次，這裡休息久一點 (10秒)
+            # 總結功能 (使用專用 Key 2)
             time.sleep(10)
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
@@ -279,7 +292,7 @@ st.title("🧠 六都房市 AI 戰情室")
 
 # 1. 取得目前可用的模型名稱
 current_model_name = get_valid_model_name()
-st.caption(f"資料來源：Google News | 🤖 AI 模型：{current_model_name or '未偵測'}")
+st.caption(f"資料來源：Google News | 🤖 AI 模型：{current_model_name or '未偵測'} | 🔑 雙鑰匙架構")
 
 # 手動刷新按鈕
 if st.button("🔄 強制刷新 (清除快取)"):
@@ -333,7 +346,7 @@ try:
             st.markdown("---") # 分隔線
             st.markdown("### 📊 AI 每日行銷策略總結 (六都分區)")
             
-            with st.spinner('AI 正在彙整全台廣告策略建議...'):
+            with st.spinner('AI 正在彙整全台廣告策略建議... (切換專用 Key 2)'):
                 if current_model_name and all_titles_for_summary:
                     marketing_summary = generate_marketing_summary(all_titles_for_summary, current_model_name)
                     # 這裡直接顯示 Markdown，CSS 會自動美化它
@@ -357,3 +370,12 @@ st.markdown(f"""
     系統診斷資訊：Streamlit v{st.__version__} | Google GenAI v{genai_version}<br>
 </div>
 """, unsafe_allow_html=True)
+```
+
+### ⚠️ 重要：如何設定兩組金鑰？
+
+程式碼更新後，請務必到 Streamlit 的 **Secrets** 設定頁面，新增這兩行設定：
+
+```toml
+GEMINI_API_KEY_NEWS = "這裡是第一組KEY_用來跑10則新聞"
+GEMINI_API_KEY_SUMMARY = "這裡是第二組KEY_用來跑總結"
