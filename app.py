@@ -370,12 +370,3 @@ st.markdown(f"""
     系統診斷資訊：Streamlit v{st.__version__} | Google GenAI v{genai_version}<br>
 </div>
 """, unsafe_allow_html=True)
-```
-
-### ⚠️ 重要：如何設定兩組金鑰？
-
-程式碼更新後，請務必到 Streamlit 的 **Secrets** 設定頁面，新增這兩行設定：
-
-```toml
-GEMINI_API_KEY_NEWS = "這裡是第一組KEY_用來跑10則新聞"
-GEMINI_API_KEY_SUMMARY = "這裡是第二組KEY_用來跑總結"
