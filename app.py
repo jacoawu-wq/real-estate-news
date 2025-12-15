@@ -231,7 +231,7 @@ def analyze_with_ai(news_title, model_name):
                 return f"⚠️ 分析失敗 ({error_str})"
     return "⚠️ 未知錯誤"
 
-# --- 核心功能 3：AI 總結行銷策略表 ---
+# --- 核心功能 3：AI 總結行銷策略表 (修改為六都版) ---
 @st.cache_data(show_spinner=False)
 def generate_marketing_summary(all_titles, model_name):
     if not api_key:
@@ -246,12 +246,12 @@ def generate_marketing_summary(all_titles, model_name):
     {titles_text}
 
     請根據這些新聞內容，彙整出一份「今日廣告投放策略建議表」。
-    請將建議分為三個區域：「北部 (北北桃)」、「中部 (台中)」、「南部 (台南/高雄)」。
-    如果新聞內容沒有特定區域，請根據其屬性歸類到最適合的區域，或列為通用建議。
+    請將建議詳細分為六個區域（六都）：「台北市」、「新北市」、「桃園市」、「台中市」、「台南市」、「高雄市」。
+    如果新聞內容沒有特定區域，請根據其屬性歸類到最適合的區域，或列為「全台通用」。
 
     請直接輸出一個 Markdown 格式的表格 (不要使用 HTML 標籤，也不要包含任何開場白或結語)。
     表格欄位必須包含：
-    1. **區域**
+    1. **六都區域**
     2. **Google廣告關鍵字建議** (3-5組)
     3. **Google聯播網受眾建議** (具體描述)
     4. **FB廣告受眾建議** (具體描述)
@@ -331,7 +331,7 @@ try:
             
             # 2. 顯示行銷策略總表 (新增區塊)
             st.markdown("---") # 分隔線
-            st.markdown("### 📊 AI 每日行銷策略總結 (北中南)")
+            st.markdown("### 📊 AI 每日行銷策略總結 (六都分區)")
             
             with st.spinner('AI 正在彙整全台廣告策略建議...'):
                 if current_model_name and all_titles_for_summary:
