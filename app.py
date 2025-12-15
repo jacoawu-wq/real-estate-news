@@ -12,16 +12,26 @@ st.set_page_config(
     layout="centered"
 )
 
-# --- CSS 美化樣式 ---
+# --- CSS 美化樣式 (升級版：專業表格) ---
 st.markdown("""
     <style>
+    /* 全局字體設定 */
+    body {
+        font-family: 'Noto Sans TC', sans-serif;
+    }
+
+    /* 新聞卡片樣式 */
     .news-card {
         background-color: #ffffff;
         padding: 20px;
         border-radius: 10px;
         margin-bottom: 20px;
         border-left: 5px solid #2e86de;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transition: transform 0.2s;
+    }
+    .news-card:hover {
+        transform: translateY(-2px);
     }
     .news-title {
         font-size: 20px;
@@ -35,6 +45,8 @@ st.markdown("""
         text-decoration: underline;
         color: #2e86de;
     }
+    
+    /* AI 分析框樣式 */
     .ai-box {
         background-color: #f8f9fa;
         border-radius: 8px;
@@ -48,20 +60,54 @@ st.markdown("""
         margin-bottom: 5px;
         font-size: 14px;
     }
-    .marketing-table table {
+
+    /* --- 表格美化核心 CSS --- */
+    /* 針對 Streamlit 渲染出的 Markdown 表格進行美化 */
+    div[data-testid="stMarkdownContainer"] table {
         width: 100%;
         border-collapse: collapse;
+        margin: 25px 0;
+        font-size: 16px;
+        font-family: 'Noto Sans TC', sans-serif;
+        box-shadow: 0 0 20px rgba(0, 0, 0, 0.08); /* 柔和陰影 */
+        border-radius: 10px;
+        overflow: hidden; /* 確保圓角不被直角單元格蓋住 */
     }
-    .marketing-table th {
-        background-color: #2e86de;
-        color: white;
-        padding: 10px;
+
+    /* 表頭樣式 */
+    div[data-testid="stMarkdownContainer"] thead tr {
+        background-color: #2e86de; /* 專業藍 */
+        color: #ffffff;
         text-align: left;
+        font-weight: bold;
     }
-    .marketing-table td {
-        border-bottom: 1px solid #ddd;
-        padding: 10px;
+
+    /* 單元格間距與格線 */
+    div[data-testid="stMarkdownContainer"] th, 
+    div[data-testid="stMarkdownContainer"] td {
+        padding: 15px 20px; /* 增加呼吸感 */
+        border-bottom: 1px solid #eeeeee;
+        line-height: 1.6;
     }
+
+    /* 斑馬紋 (偶數行變色) */
+    div[data-testid="stMarkdownContainer"] tbody tr:nth-of-type(even) {
+        background-color: #f8f9fa; 
+    }
+
+    /* 滑鼠懸停效果 */
+    div[data-testid="stMarkdownContainer"] tbody tr:hover {
+        background-color: #e6f7ff; /* 淺藍色 highlight */
+        cursor: default;
+        transition: background-color 0.2s;
+    }
+
+    /* 最後一行加粗底線 */
+    div[data-testid="stMarkdownContainer"] tbody tr:last-of-type {
+        border-bottom: 3px solid #2e86de;
+    }
+    
+    /* 底部除錯資訊 */
     .debug-info {
         font-size: 12px;
         color: #999;
@@ -185,7 +231,7 @@ def analyze_with_ai(news_title, model_name):
                 return f"⚠️ 分析失敗 ({error_str})"
     return "⚠️ 未知錯誤"
 
-# --- 核心功能 3：AI 總結行銷策略表 (新功能) ---
+# --- 核心功能 3：AI 總結行銷策略表 ---
 @st.cache_data(show_spinner=False)
 def generate_marketing_summary(all_titles, model_name):
     if not api_key:
@@ -203,13 +249,12 @@ def generate_marketing_summary(all_titles, model_name):
     請將建議分為三個區域：「北部 (北北桃)」、「中部 (台中)」、「南部 (台南/高雄)」。
     如果新聞內容沒有特定區域，請根據其屬性歸類到最適合的區域，或列為通用建議。
 
-    請直接輸出一個 Markdown 表格，表格欄位必須包含：
-    1. **區域** (北部/中部/南部)
-    2. **Google廣告關鍵字建議** (請列出3-5組高潛力關鍵字)
-    3. **Google聯播網受眾建議** (請具體描述興趣、意向或瀏覽習慣)
-    4. **FB廣告受眾建議** (請建議興趣標籤、行為或人口統計特徵)
-
-    請確保內容具體且可執行，不需要開場白，直接給我表格。
+    請直接輸出一個 Markdown 格式的表格 (不要使用 HTML 標籤，也不要包含任何開場白或結語)。
+    表格欄位必須包含：
+    1. **區域**
+    2. **Google廣告關鍵字建議** (3-5組)
+    3. **Google聯播網受眾建議** (具體描述)
+    4. **FB廣告受眾建議** (具體描述)
     """
 
     max_retries = 3
@@ -291,7 +336,8 @@ try:
             with st.spinner('AI 正在彙整全台廣告策略建議...'):
                 if current_model_name and all_titles_for_summary:
                     marketing_summary = generate_marketing_summary(all_titles_for_summary, current_model_name)
-                    st.markdown(f'<div class="marketing-table">{marketing_summary}</div>', unsafe_allow_html=True)
+                    # 這裡直接顯示 Markdown，CSS 會自動美化它
+                    st.markdown(marketing_summary)
                 else:
                     st.error("無法生成行銷總結")
 
