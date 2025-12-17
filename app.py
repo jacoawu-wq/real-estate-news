@@ -16,9 +16,7 @@ st.set_page_config(
 st.markdown("""
     <style>
     /* 全局字體設定 */
-    body {
-        font-family: 'Noto Sans TC', sans-serif;
-    }
+    body { font-family: 'Noto Sans TC', sans-serif; }
 
     /* 新聞卡片樣式 */
     .news-card {
@@ -30,9 +28,7 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         transition: transform 0.2s;
     }
-    .news-card:hover {
-        transform: translateY(-2px);
-    }
+    .news-card:hover { transform: translateY(-2px); }
     .news-title {
         font-size: 20px;
         font-weight: bold;
@@ -41,10 +37,7 @@ st.markdown("""
         display: block;
         margin-bottom: 10px;
     }
-    .news-title:hover {
-        text-decoration: underline;
-        color: #2e86de;
-    }
+    .news-title:hover { text-decoration: underline; color: #2e86de; }
     
     /* AI 分析框樣式 */
     .ai-box {
@@ -61,6 +54,18 @@ st.markdown("""
         font-size: 14px;
     }
     
+    /* 模型資訊標籤 */
+    .model-tag {
+        background-color: #ffeaa7;
+        color: #d35400;
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-size: 12px;
+        font-weight: bold;
+        margin-bottom: 20px;
+        display: inline-block;
+    }
+    
     /* 底部除錯資訊 */
     .debug-info {
         font-size: 12px;
@@ -74,48 +79,13 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 設定 AI ---
-# 自動相容：無論 Secrets 是設成 GEMINI_API_KEY 還是 GEMINI_API_KEY_NEWS，都能自動抓到
-api_key = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY_NEWS") or st.secrets.get("GEMINI_API_KEY_SUMMARY")
-
+api_key = st.secrets.get("GEMINI_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
-else:
-    st.error("❌ 找不到 API Key！請檢查 Streamlit Secrets 設定。")
 
-# --- 核心功能 0：自動尋找可用的模型 (防呆機制) ---
-@st.cache_resource
-def get_valid_model_name():
-    if not api_key:
-        return None
-    
-    try:
-        valid_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                valid_models.append(m.name)
-        
-        # 優先順序：優先找 Flash (速度快且免費額度較高)
-        preferences = [
-            'models/gemini-1.5-flash',
-            'models/gemini-1.5-pro', 
-            'models/gemini-1.0-pro', 
-            'models/gemini-pro'
-        ]
-        
-        for pref in preferences:
-            if pref in valid_models:
-                return pref
-        
-        # 關鍵字搜尋保底
-        for m in valid_models:
-            if 'flash' in m.lower() and 'exp' not in m.lower():
-                return m
-
-        return 'models/gemini-1.5-flash'
-        
-    except Exception as e:
-        print(f"List models failed: {e}")
-        return 'models/gemini-1.5-flash'
+# --- 核心功能 0：強制指定模型 (不再浪費額度去偵測) ---
+# 直接指定目前免費額度最寬鬆的模型
+CURRENT_MODEL_NAME = 'models/gemini-1.5-flash'
 
 # --- 核心功能 1：抓取新聞 (快取 1 小時) ---
 @st.cache_data(ttl=3600)
@@ -131,14 +101,11 @@ def get_six_capital_news():
         title = entry.title
         link = entry.link
         published = entry.published_parsed
+        pub_date = datetime(*published[:6]).strftime('%m/%d %H:%M') if published else "最新"
         
-        if published:
-            pub_date = datetime(*published[:6]).strftime('%m/%d %H:%M')
-        else:
-            pub_date = "最新"
-
         if " - " in title:
-            title_text, source = title.rsplit(" - ", 1)
+            title_text = title.rsplit(" - ", 1)[0]
+            source = title.rsplit(" - ", 1)[1]
         else:
             title_text = title
             source = "新聞媒體"
@@ -152,9 +119,9 @@ def get_six_capital_news():
     
     return news_items
 
-# --- 核心功能 2：AI 單則分析 (含自動重試) ---
+# --- 核心功能 2：AI 單則分析 (慢速節流模式) ---
 @st.cache_data(show_spinner=False)
-def analyze_with_ai(news_title, model_name):
+def analyze_with_ai(news_title):
     if not api_key:
         return "無法分析 (缺少 API Key)"
         
@@ -171,16 +138,16 @@ def analyze_with_ai(news_title, model_name):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 穩定的緩衝時間：2 秒
-            time.sleep(2)
-            model = genai.GenerativeModel(model_name)
+            # ★ 關鍵修改：將緩衝時間拉長到 4 秒，確保不被 Google 擋
+            time.sleep(4)
+            model = genai.GenerativeModel(CURRENT_MODEL_NAME)
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
             error_str = str(e)
-            # 如果是流量限制 (429)，休息久一點再試
+            # 如果是流量限制 (429)，休息更久 (10秒) 再試
             if "429" in error_str and attempt < max_retries - 1:
-                time.sleep(5)
+                time.sleep(10)
                 continue
             
             if attempt == max_retries - 1:
@@ -192,19 +159,18 @@ def analyze_with_ai(news_title, model_name):
 # --- 網頁介面呈現 ---
 st.title("🧠 六都房市 AI 戰情室")
 
-# 1. 取得目前可用的模型名稱
-current_model_name = get_valid_model_name()
-st.caption(f"資料來源：Google News | 🤖 AI 模型：{current_model_name or '未偵測'}")
+# 顯示目前使用的模型與狀態
+st.markdown(f'<div class="model-tag">🔥 目前強制使用模型：{CURRENT_MODEL_NAME} (慢速節流模式)</div>', unsafe_allow_html=True)
+st.caption(f"資料來源：Google News | 更新頻率：每小時自動刷新")
 
 # 手動刷新按鈕
 if st.button("🔄 強制刷新 (清除快取)"):
     st.cache_data.clear()
-    st.cache_resource.clear()
     st.rerun()
 
 # 主程式流程
 try:
-    with st.spinner('正在搜尋並分析新聞... (逐條分析中，請稍候)'):
+    with st.spinner('正在搜尋並分析新聞... (因開啟節流模式，每則需等待 4 秒，請耐心等候)'):
         news_data = get_six_capital_news()
         
         if not news_data:
@@ -224,10 +190,7 @@ try:
                 """, unsafe_allow_html=True)
                 
                 # 呼叫 AI 分析
-                if current_model_name:
-                    ai_result = analyze_with_ai(news['title'], current_model_name)
-                else:
-                    ai_result = "⚠️ 無法連接 AI 模型"
+                ai_result = analyze_with_ai(news['title'])
 
                 # 顯示 AI 結果
                 st.markdown(f"""
