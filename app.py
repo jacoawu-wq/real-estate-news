@@ -83,9 +83,46 @@ api_key = st.secrets.get("GEMINI_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
 
-# --- 核心功能 0：強制指定模型 (不再浪費額度去偵測) ---
-# 直接指定目前免費額度最寬鬆的模型
-CURRENT_MODEL_NAME = 'models/gemini-1.5-flash'
+# --- 核心功能 0：自動尋找可用的模型 (修復 404 錯誤) ---
+@st.cache_resource
+def get_valid_model_name():
+    if not api_key:
+        return 'models/gemini-pro' # 預設值
+    
+    try:
+        # 1. 取得所有支援生成的模型清單
+        valid_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                valid_models.append(m.name)
+        
+        # 2. 設定優先順序 (優先找 Flash 系列，若無則找 Pro)
+        preferences = [
+            'models/gemini-1.5-flash',
+            'models/gemini-1.5-flash-latest',
+            'models/gemini-1.0-pro', 
+            'models/gemini-pro'
+        ]
+        
+        # 3. 嘗試匹配優先清單
+        for pref in preferences:
+            if pref in valid_models:
+                return pref
+        
+        # 4. 如果都沒抓到，回傳清單中第一個包含 'gemini' 的模型
+        for m in valid_models:
+            if 'gemini' in m.lower():
+                return m
+
+        # 5. 真的都沒找到，回傳 gemini-pro 碰運氣
+        return 'models/gemini-pro'
+        
+    except Exception as e:
+        print(f"List models failed: {e}")
+        return 'models/gemini-pro'
+
+# 取得目前可用的模型
+CURRENT_MODEL_NAME = get_valid_model_name()
 
 # --- 核心功能 1：抓取新聞 (快取 1 小時) ---
 @st.cache_data(ttl=3600)
@@ -160,12 +197,13 @@ def analyze_with_ai(news_title):
 st.title("🧠 六都房市 AI 戰情室")
 
 # 顯示目前使用的模型與狀態
-st.markdown(f'<div class="model-tag">🔥 目前強制使用模型：{CURRENT_MODEL_NAME} (慢速節流模式)</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="model-tag">🔥 目前使用模型：{CURRENT_MODEL_NAME} (自動偵測 + 節流模式)</div>', unsafe_allow_html=True)
 st.caption(f"資料來源：Google News | 更新頻率：每小時自動刷新")
 
 # 手動刷新按鈕
 if st.button("🔄 強制刷新 (清除快取)"):
     st.cache_data.clear()
+    st.cache_resource.clear()
     st.rerun()
 
 # 主程式流程
