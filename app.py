@@ -15,10 +15,7 @@ st.set_page_config(
 # --- CSS 美化樣式 ---
 st.markdown("""
     <style>
-    /* 全局字體設定 */
     body { font-family: 'Noto Sans TC', sans-serif; }
-
-    /* 新聞卡片樣式 */
     .news-card {
         background-color: #ffffff;
         padding: 20px;
@@ -38,8 +35,6 @@ st.markdown("""
         margin-bottom: 10px;
     }
     .news-title:hover { text-decoration: underline; color: #2e86de; }
-    
-    /* AI 分析框樣式 */
     .ai-box {
         background-color: #f8f9fa;
         border-radius: 8px;
@@ -53,8 +48,6 @@ st.markdown("""
         margin-bottom: 5px;
         font-size: 14px;
     }
-    
-    /* 模型資訊標籤 */
     .model-tag {
         background-color: #ffeaa7;
         color: #d35400;
@@ -65,8 +58,6 @@ st.markdown("""
         margin-bottom: 20px;
         display: inline-block;
     }
-    
-    /* 底部除錯資訊 */
     .debug-info {
         font-size: 12px;
         color: #999;
@@ -83,134 +74,114 @@ api_key = st.secrets.get("GEMINI_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
 
-# --- 核心功能 0：自動尋找並測試可用的模型 (實彈測試版) ---
+# --- 核心功能 0：實彈測試並選擇可用模型 (修復 404) ---
 @st.cache_resource
-def get_valid_model_name():
+def get_working_model():
     if not api_key:
-        return 'models/gemini-1.5-flash' # 預設值
+        return None, "未設定 API Key"
     
-    # 定義我們想嘗試的模型順序 (優先找快且新的)
+    # 候選名單：從最新試到最舊，保證一定有一個能用
     candidates = [
-        "models/gemini-1.5-flash",
-        "models/gemini-1.5-pro",
-        "models/gemini-1.0-pro", 
-        "models/gemini-pro"
+        "gemini-1.5-flash",       # 首選：快且便宜
+        "gemini-1.5-pro",         # 次選：強大
+        "gemini-1.0-pro",         # 備選
+        "gemini-pro"              # 保底：最穩定 (Legacy)
     ]
     
-    print("正在測試可用模型...")
+    status_text = []
     
     for model_name in candidates:
         try:
-            # 實彈測試：真的發送一個請求去確認是否能用
+            # 實彈測試：真的發送一個請求
             model = genai.GenerativeModel(model_name)
-            model.generate_content("Hi") # 消耗極少 Token 的測試
-            print(f"測試成功：{model_name}")
-            return model_name
+            model.generate_content("Hi")
+            return model_name, f"測試成功：{model_name}"
         except Exception as e:
-            print(f"模型 {model_name} 測試失敗 ({e})，嘗試下一個...")
+            error_msg = str(e)
+            if "404" in error_msg:
+                status_text.append(f"{model_name} ❌ (找不到模型)")
+            elif "429" in error_msg:
+                status_text.append(f"{model_name} ⏳ (忙碌中)")
+            else:
+                status_text.append(f"{model_name} ⚠️ ({error_msg[:20]}...)")
             continue
             
-    # 如果全部都失敗，還是回傳 flash 碰運氣
-    return "models/gemini-1.5-flash"
+    # 如果全部失敗，還是回傳一個保底的，並附上錯誤紀錄
+    return "gemini-pro", " | ".join(status_text)
 
-# 取得目前可用的模型
-CURRENT_MODEL_NAME = get_valid_model_name()
+# 初始化模型
+CURRENT_MODEL_NAME, MODEL_STATUS = get_working_model()
 
-# --- 核心功能 1：抓取新聞 (快取 1 小時) ---
+# --- 核心功能 1：抓取新聞 ---
 @st.cache_data(ttl=3600)
 def get_six_capital_news():
     base_url = "https://news.google.com/rss/search?q="
     query = "(房地產+OR+房市+OR+建案+OR+重劃區)+AND+(台北+OR+新北+OR+桃園+OR+台中+OR+台南+OR+高雄)+when:1d"
     params = "&hl=zh-TW&gl=TW&ceid=TW:zh-TW"
-    
     feed = feedparser.parse(base_url + query + params)
     news_items = []
-
     for entry in feed.entries[:10]:
         title = entry.title
         link = entry.link
         published = entry.published_parsed
         pub_date = datetime(*published[:6]).strftime('%m/%d %H:%M') if published else "最新"
-        
-        if " - " in title:
-            title_text = title.rsplit(" - ", 1)[0]
-            source = title.rsplit(" - ", 1)[1]
-        else:
-            title_text = title
-            source = "新聞媒體"
-
-        news_items.append({
-            "title": title_text,
-            "link": link,
-            "source": source,
-            "date": pub_date
-        })
-    
+        title_text = title.rsplit(" - ", 1)[0] if " - " in title else title
+        source = title.rsplit(" - ", 1)[1] if " - " in title else "新聞媒體"
+        news_items.append({"title": title_text, "link": link, "source": source, "date": pub_date})
     return news_items
 
-# --- 核心功能 2：AI 單則分析 (慢速節流模式) ---
+# --- 核心功能 2：AI 分析 (4秒慢速緩衝) ---
 @st.cache_data(show_spinner=False)
 def analyze_with_ai(news_title):
-    if not api_key:
-        return "無法分析 (缺少 API Key)"
-        
+    if not api_key: return "無法分析 (缺少 API Key)"
+    
     prompt = f"""
     你是一位專業的台灣房地產分析師。請針對以下新聞標題進行分析：
     新聞標題：「{news_title}」
-    
     請簡潔分析（各約100字）：
     1. **【產業觀點】**：對市場的影響或趨勢。
     2. **【受眾畫像】**：誰會對這則新聞最有感？
     """
     
-    # 自動重試機制 (Retry Logic)
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # ★ 關鍵修改：將緩衝時間拉長到 4 秒，確保不被 Google 擋
-            time.sleep(4)
+            time.sleep(4) # 慢速緩衝
             model = genai.GenerativeModel(CURRENT_MODEL_NAME)
             response = model.generate_content(prompt)
             return response.text
         except Exception as e:
-            error_str = str(e)
-            # 如果是流量限制 (429)，休息更久 (10秒) 再試
-            if "429" in error_str and attempt < max_retries - 1:
+            if "429" in str(e) and attempt < max_retries - 1:
                 time.sleep(10)
                 continue
-            
             if attempt == max_retries - 1:
-                if "429" in error_str:
-                    return "⚠️ AI 分析忙碌中 (流量限制)，請稍後再試。"
-                return f"⚠️ 分析失敗 ({error_str})"
+                return f"⚠️ 分析失敗 ({str(e)})"
     return "⚠️ 未知錯誤"
 
-# --- 網頁介面呈現 ---
+# --- 主程式 ---
 st.title("🧠 六都房市 AI 戰情室")
 
-# 顯示目前使用的模型與狀態
-st.markdown(f'<div class="model-tag">🔥 目前使用模型：{CURRENT_MODEL_NAME} (實彈測試 + 節流模式)</div>', unsafe_allow_html=True)
-st.caption(f"資料來源：Google News | 更新頻率：每小時自動刷新")
+# 顯示模型狀態
+if "測試成功" in MODEL_STATUS:
+    st.markdown(f'<div class="model-tag">✅ {MODEL_STATUS}</div>', unsafe_allow_html=True)
+else:
+    st.error(f"⚠️ 模型檢測異常，嘗試使用備用模型。記錄：{MODEL_STATUS}")
 
-# 手動刷新按鈕
+st.caption(f"資料來源：Google News | 自動節流模式")
+
 if st.button("🔄 強制刷新 (清除快取)"):
     st.cache_data.clear()
-    st.cache_resource.clear() # 清除模型偵測快取
+    st.cache_resource.clear()
     st.rerun()
 
-# 主程式流程
 try:
-    with st.spinner('正在搜尋並分析新聞... (因開啟節流模式，每則需等待 4 秒，請耐心等候)'):
+    with st.spinner('正在搜尋並分析新聞... (每則需等待 4 秒)'):
         news_data = get_six_capital_news()
-        
         if not news_data:
             st.warning("目前沒有最新新聞。")
         else:
-            # 進度條
             progress_bar = st.progress(0)
-            
             for i, news in enumerate(news_data):
-                # 顯示新聞卡片
                 st.markdown(f"""
                 <div class="news-card">
                     <a href="{news['link']}" target="_blank" class="news-title">{news['title']}</a>
@@ -219,10 +190,8 @@ try:
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # 呼叫 AI 分析
                 ai_result = analyze_with_ai(news['title'])
-
-                # 顯示 AI 結果
+                
                 st.markdown(f"""
                     <div class="ai-box">
                         <div class="ai-label">✨ AI 智能解析</div>
@@ -232,24 +201,22 @@ try:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-                
-                # 更新進度條
                 progress_bar.progress((i + 1) / len(news_data))
             
-            progress_bar.empty() # 跑完隱藏進度條
+            progress_bar.empty()
             st.success("✅ 分析完成！")
 
 except Exception as e:
     st.error(f"系統發生錯誤：{e}")
 
-# --- 底部診斷資訊 ---
-try:
-    genai_version = genai.__version__
-except:
-    genai_version = "未知"
+# --- 顯示套件版本 (Debug用) ---
+try: ver = genai.__version__
+except: ver = "Unknown"
+st.markdown(f'<div class="debug-info">System: Streamlit v{st.__version__} | GenAI v{ver} (若版本低於0.7.0請更新requirements.txt)</div>', unsafe_allow_html=True)
+```
 
-st.markdown(f"""
-<div class="debug-info">
-    系統診斷資訊：Streamlit v{st.__version__} | Google GenAI v{genai_version}<br>
-</div>
-""", unsafe_allow_html=True)
+### 更新後請注意看：
+1.  **網頁最上方**：會出現一個標籤，告訴你最後成功連上的是哪個模型（例如 `測試成功：gemini-pro`）。
+2.  **網頁最下方**：有一行灰色小字 `GenAI v...`。
+    * 如果版本號是 `0.7.2` 或更高，那就沒問題。
+    * 如果版本號很低（如 `0.3.0`），代表你的 `requirements.txt` 更新失敗，請一定要去 GitHub 檢查 `requirements.txt` 裡面是不是寫著 `google-generativeai>=0.7.0`，並且再次執行 **Reboot App**。
