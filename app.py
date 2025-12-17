@@ -74,40 +74,48 @@ api_key = st.secrets.get("GEMINI_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
 
-# --- 核心功能 0：實彈測試並選擇可用模型 (修復 404) ---
+# --- 核心功能 0：終極模型搜尋 (解決 404 問題) ---
 @st.cache_resource
 def get_working_model():
     if not api_key:
         return None, "未設定 API Key"
     
-    # 候選名單：從最新試到最舊，保證一定有一個能用
-    candidates = [
-        "gemini-1.5-flash",       # 首選：快且便宜
-        "gemini-1.5-pro",         # 次選：強大
-        "gemini-1.0-pro",         # 備選
-        "gemini-pro"              # 保底：最穩定 (Legacy)
-    ]
-    
     status_text = []
+    
+    # 策略 1: 嘗試熱門模型 (優先順序)
+    candidates = [
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-pro"
+    ]
     
     for model_name in candidates:
         try:
-            # 實彈測試：真的發送一個請求
             model = genai.GenerativeModel(model_name)
             model.generate_content("Hi")
             return model_name, f"測試成功：{model_name}"
         except Exception as e:
-            error_msg = str(e)
-            if "404" in error_msg:
-                status_text.append(f"{model_name} ❌ (找不到模型)")
-            elif "429" in error_msg:
-                status_text.append(f"{model_name} ⏳ (忙碌中)")
-            else:
-                status_text.append(f"{model_name} ⚠️ ({error_msg[:20]}...)")
+            status_text.append(f"{model_name} ❌")
             continue
-            
-    # 如果全部失敗，還是回傳一個保底的，並附上錯誤紀錄
-    return "gemini-pro", " | ".join(status_text)
+
+    # 策略 2: 如果指定名稱都失敗，直接問 API 有什麼能用的 (List Models)
+    try:
+        status_text.append("啟動自動搜尋...")
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                # 找到一個支援生成的模型，直接拿來用
+                test_name = m.name # 這裡會包含 'models/' 前綴
+                try:
+                    model = genai.GenerativeModel(test_name)
+                    model.generate_content("Hi")
+                    return test_name, f"自動搜尋成功：{test_name}"
+                except:
+                    continue
+    except Exception as e:
+        status_text.append(f"搜尋失敗: {str(e)}")
+
+    # 策略 3: 真的都不行，回傳保底 (雖然可能也會失敗)
+    return "models/gemini-pro", " | ".join(status_text)
 
 # 初始化模型
 CURRENT_MODEL_NAME, MODEL_STATUS = get_working_model()
@@ -162,10 +170,10 @@ def analyze_with_ai(news_title):
 st.title("🧠 六都房市 AI 戰情室")
 
 # 顯示模型狀態
-if "測試成功" in MODEL_STATUS:
+if "成功" in MODEL_STATUS:
     st.markdown(f'<div class="model-tag">✅ {MODEL_STATUS}</div>', unsafe_allow_html=True)
 else:
-    st.error(f"⚠️ 模型檢測異常，嘗試使用備用模型。記錄：{MODEL_STATUS}")
+    st.error(f"⚠️ 模型連線異常：{MODEL_STATUS}。請檢查 API Key 或網路狀態。")
 
 st.caption(f"資料來源：Google News | 自動節流模式")
 
