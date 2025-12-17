@@ -213,10 +213,3 @@ except Exception as e:
 try: ver = genai.__version__
 except: ver = "Unknown"
 st.markdown(f'<div class="debug-info">System: Streamlit v{st.__version__} | GenAI v{ver} (若版本低於0.7.0請更新requirements.txt)</div>', unsafe_allow_html=True)
-```
-
-### 更新後請注意看：
-1.  **網頁最上方**：會出現一個標籤，告訴你最後成功連上的是哪個模型（例如 `測試成功：gemini-pro`）。
-2.  **網頁最下方**：有一行灰色小字 `GenAI v...`。
-    * 如果版本號是 `0.7.2` 或更高，那就沒問題。
-    * 如果版本號很低（如 `0.3.0`），代表你的 `requirements.txt` 更新失敗，請一定要去 GitHub 檢查 `requirements.txt` 裡面是不是寫著 `google-generativeai>=0.7.0`，並且再次執行 **Reboot App**。
